@@ -85,14 +85,15 @@ def generate(cfg):
 
     # set save path and prepare data for generation
     if cfg.input.endswith('.bvh'):
-        base_dir = osp.join(
-            cfg.output_dir, cfg.input.split('/')[-1].split('.')[0])
+        # Get input directory and filename
+        input_dir = osp.dirname(cfg.input) if cfg.output_dir == './output' else cfg.output_dir
+        input_name = osp.splitext(osp.basename(cfg.input))[0]
         motion_data = [BVHMotion(cfg.input, skeleton_name=cfg.skeleton_name, repr=cfg.repr,
                                  use_velo=cfg.use_velo, keep_up_pos=cfg.keep_up_pos, up_axis=cfg.up_axis, padding_last=cfg.padding_last,
                                  requires_contact=cfg.requires_contact, joint_reduction=cfg.joint_reduction)]
     elif cfg.input.endswith('.txt'):
-        base_dir = osp.join(cfg.output_dir, cfg.input.split(
-            '/')[-2], cfg.input.split('/')[-1].split('.')[0])
+        input_dir = osp.dirname(cfg.input) if cfg.output_dir == './output' else cfg.output_dir
+        input_name = osp.splitext(osp.basename(cfg.input))[0]
         motion_data = load_multiple_dataset(name_list=cfg.input, skeleton_name=cfg.skeleton_name, repr=cfg.repr,
                                             use_velo=cfg.use_velo, keep_up_pos=cfg.keep_up_pos, up_axis=cfg.up_axis, padding_last=cfg.padding_last,
                                             requires_contact=cfg.requires_contact, joint_reduction=cfg.joint_reduction)
@@ -114,13 +115,26 @@ def generate(cfg):
         num_frames_to_use = str(int(cfg.duration / frametime))
         print(f"Duration {cfg.duration}s at {frametime}s/frame = {num_frames_to_use} frames")
     
-    prefix = f"s{cfg.seed}+{num_frames_to_use}+{cfg.repr}+use_velo_{cfg.use_velo}+kypose_{cfg.keep_up_pos}+padding_{cfg.padding_last}" \
-             f"+contact_{cfg.requires_contact}+jredu_{cfg.joint_reduction}+n{cfg.noise_sigma}+pyr{cfg.pyr_factor}" \
-             f"+r{cfg.coarse_ratio}_{cfg.coarse_ratio_factor}+itr{cfg.num_steps}+ps_{cfg.patch_size}+alpha_{cfg.alpha}" \
-             f"+loop_{cfg.loop}"
-
-    # prepare save directory
-    save_dir = osp.join(base_dir, prefix)
+    # Determine output directory and filename
+    # For debug mode, create a subdirectory with detailed parameters
+    if cfg.mode == 'debug':
+        prefix = f"s{cfg.seed}+{num_frames_to_use}+{cfg.repr}+use_velo_{cfg.use_velo}+kypose_{cfg.keep_up_pos}+padding_{cfg.padding_last}" \
+                 f"+contact_{cfg.requires_contact}+jredu_{cfg.joint_reduction}+n{cfg.noise_sigma}+pyr{cfg.pyr_factor}" \
+                 f"+r{cfg.coarse_ratio}_{cfg.coarse_ratio_factor}+itr{cfg.num_steps}+ps_{cfg.patch_size}+alpha_{cfg.alpha}" \
+                 f"+loop_{cfg.loop}"
+        output_dir = osp.join(input_dir, input_name, prefix)
+        output_filename = "syn.bvh"
+        debug_dir = output_dir
+    else:
+        # Normal mode: simple filename in input directory
+        if cfg.seed is not None:
+            output_filename = f"{input_name}_syn_seed{cfg.seed:06d}.bvh"
+        else:
+            output_filename = f"{input_name}_syn.bvh"
+        output_dir = input_dir
+        debug_dir = None
+    
+    output_path = osp.join(output_dir, output_filename)
 
     # perform the generation
     model = GenMM(device=cfg.device, silent=True if cfg.mode == 'eval' else False)
@@ -162,7 +176,7 @@ def generate(cfg):
                     patch_size=cfg.patch_size, 
                     coarse_ratio=cfg.coarse_ratio,
                     pyr_factor=cfg.pyr_factor,
-                    debug_dir=save_dir if cfg.mode == 'debug' else None)
+                    debug_dir=debug_dir)
     
     # Post-process: adjust final position if last frames are fixed
     if cfg.keyframe_last_n is not None and cfg.use_velo and cfg.fix_final_position:
@@ -211,14 +225,15 @@ def generate(cfg):
         print(f"Position adjusted. Offset applied: {pos_offset.squeeze().cpu().numpy()}")
     
     # save the generated results
-    print(f"Saving results to: {save_dir}")
-    os.makedirs(save_dir, exist_ok=True)
-    print(f"Directory created/verified: {save_dir}")
-    motion_data[0].write(f"{save_dir}/syn.bvh", syn)
-    print(f"File saved: {save_dir}/syn.bvh")
+    print(f"Saving results to: {output_path}")
+    os.makedirs(output_dir, exist_ok=True)
+    motion_data[0].write(output_path, syn)
+    print(f"File saved: {output_path}")
 
     if cfg.post_precess:
-        cmd = f"python fix_contact.py --prefix {osp.abspath(save_dir)} --name syn --skeleton_name={cfg.skeleton_name}"
+        # Note: post_precess requires skeleton_name
+        output_basename = osp.splitext(osp.basename(output_path))[0]
+        cmd = f"python fix_contact.py --prefix {osp.abspath(output_dir)} --name {output_basename} --skeleton_name={cfg.skeleton_name}"
         os.system(cmd)
 
 if __name__ == '__main__':
