@@ -106,7 +106,8 @@ python run_random_generation.py -i input.bvh --keyframe_start -10 --keyframe_end
 
 **Output configuration:**
 ```sh
-# Specify output directory (default: ./output)
+# Specify output directory
+# Default: same directory as input file
 python run_random_generation.py -i input.bvh -o ./my_output
 
 # Set random seed for reproducibility
@@ -142,6 +143,7 @@ python run_random_generation.py -i input.bvh --up_axis Z_UP
 **Generation parameters:**
 ```sh
 # Output length specification
+# Default: same length as input
 python run_random_generation.py -i input.bvh --num_frames 200    # exact frame count
 python run_random_generation.py -i input.bvh --num_frames 2x     # 2x input length
 python run_random_generation.py -i input.bvh --duration 5.0      # 5 seconds

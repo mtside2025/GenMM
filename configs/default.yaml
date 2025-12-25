@@ -11,7 +11,7 @@ skeleton_aware: false
 joints_group: null
 
 # generate parameters
-num_frames: '2x_nframes'
+num_frames: '1x_nframes'
 alpha: 0.01
 num_steps: 3
 noise_sigma: 10.0
