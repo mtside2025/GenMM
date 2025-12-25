@@ -48,6 +48,8 @@ args.add_argument('--joints_group', type=str,
 # for synthesis
 args.add_argument('--num_frames', type=str, 
                   help='number of synthesized frames, supported Nx(N times) and int input.')
+args.add_argument('--duration', type=float, default=None,
+                  help='duration in seconds for synthesized motion (alternative to --num_frames). Will be converted to frames based on input motion framerate.')
 args.add_argument('--alpha', type=float,
                   help='completeness/diversity trade-off alpha value.')
 args.add_argument('--num_steps', type=int,
@@ -96,7 +98,23 @@ def generate(cfg):
                                             requires_contact=cfg.requires_contact, joint_reduction=cfg.joint_reduction)
     else:
         raise ValueError('exemplar must be a bvh file or a txt file')
-    prefix = f"s{cfg.seed}+{cfg.num_frames}+{cfg.repr}+use_velo_{cfg.use_velo}+kypose_{cfg.keep_up_pos}+padding_{cfg.padding_last}" \
+    
+    # Convert duration to num_frames if specified
+    num_frames_to_use = cfg.num_frames
+    if cfg.duration is not None:
+        # Get frametime from the first motion data
+        if cfg.input.endswith('.bvh'):
+            from dataset.bvh.bvh_parser import BVH_file
+            bvh = BVH_file(cfg.input, skeleton_conf=None, requires_contact=False, joint_reduction=False)
+            frametime = bvh.frametime
+        else:
+            # For txt files, use the first motion
+            frametime = motion_data[0].frametime
+        
+        num_frames_to_use = str(int(cfg.duration / frametime))
+        print(f"Duration {cfg.duration}s at {frametime}s/frame = {num_frames_to_use} frames")
+    
+    prefix = f"s{cfg.seed}+{num_frames_to_use}+{cfg.repr}+use_velo_{cfg.use_velo}+kypose_{cfg.keep_up_pos}+padding_{cfg.padding_last}" \
              f"+contact_{cfg.requires_contact}+jredu_{cfg.joint_reduction}+n{cfg.noise_sigma}+pyr{cfg.pyr_factor}" \
              f"+r{cfg.coarse_ratio}_{cfg.coarse_ratio_factor}+itr{cfg.num_steps}+ps_{cfg.patch_size}+alpha_{cfg.alpha}" \
              f"+loop_{cfg.loop}"
@@ -138,7 +156,7 @@ def generate(cfg):
     
     criteria = PatchCoherentLoss(patch_size=cfg.patch_size, alpha=cfg.alpha, loop=cfg.loop, cache=True)
     syn = model.run(motion_data, criteria,
-                    num_frames=cfg.num_frames,
+                    num_frames=num_frames_to_use,
                     num_steps=cfg.num_steps,
                     noise_sigma=cfg.noise_sigma,
                     patch_size=cfg.patch_size, 

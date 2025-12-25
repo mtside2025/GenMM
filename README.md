@@ -56,6 +56,19 @@ We use an Apple M1 and NVIDIA Tesla V100 with 32 GB RAM to generate each motion,
 ### Keyframe-Guided Generation
 You can fix specific frames from the input motion to guide the generation. This is useful for creating motion variations while preserving start/end poses or creating loopable animations.
 
+**Duration control:**
+
+Specify the desired output length in seconds using `--duration`:
+```sh
+# Generate 5 seconds of motion
+python run_random_generation.py -i input.bvh --duration 5.0
+
+# Generate 10 seconds with keyframe constraints
+python run_random_generation.py -i input.bvh --duration 10.0 --keyframe_first_n 5 --keyframe_last_n 5
+```
+
+The duration is automatically converted to frames based on the input motion's framerate (typically 30fps or 60fps).
+
 **Basic usage:**
 ```sh
 # Fix first 5 frames
