@@ -95,6 +95,9 @@ def generate(cfg):
              f"+r{cfg.coarse_ratio}_{cfg.coarse_ratio_factor}+itr{cfg.num_steps}+ps_{cfg.patch_size}+alpha_{cfg.alpha}" \
              f"+loop_{cfg.loop}"
 
+    # prepare save directory
+    save_dir = osp.join(base_dir, prefix)
+
     # perform the generation
     model = GenMM(device=cfg.device, silent=True if cfg.mode == 'eval' else False)
     
@@ -116,7 +119,6 @@ def generate(cfg):
                     debug_dir=save_dir if cfg.mode == 'debug' else None)
     
     # save the generated results
-    save_dir = osp.join(base_dir, prefix)
     os.makedirs(save_dir, exist_ok=True)
     motion_data[0].write(f"{save_dir}/syn.bvh", syn)
 
