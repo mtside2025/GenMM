@@ -166,13 +166,74 @@ class GenMM:
 
             # Manually set the keyframes in synthesized motion to be the ones from the input motion
             if keyframe_indices is not None:
-                if syn_length >= keyframe_indices.stop and km_length >= keyframe_indices.stop:
-                    synthesized[..., keyframe_indices] = keyframe_motion[..., keyframe_indices]
+                # Handle both single slice and list of slices
+                indices_list = keyframe_indices if isinstance(keyframe_indices, list) else [keyframe_indices]
+                
+                for kf_slice in indices_list:
+                    # Check if the indices are valid for both tensors
+                    # For negative indices or None stop, always apply if start is valid
+                    start = kf_slice.start if kf_slice.start is not None else 0
+                    stop = kf_slice.stop
+                    
+                    # Handle negative start index
+                    if start < 0:
+                        start_syn = syn_length + start
+                        start_km = km_length + start
+                    else:
+                        start_syn = start
+                        start_km = start
+                    
+                    # Only apply if both tensors have enough frames for the start index
+                    if start_syn >= 0 and start_km >= 0 and start_syn < syn_length and start_km < km_length:
+                        if stop is None or (syn_length >= stop and km_length >= stop):
+                            synthesized[..., kf_slice] = keyframe_motion[..., kf_slice]
 
             # Update status
             losses.append(loss.item())
             pbar.step()
             pbar.print()
+
+        # Post-process: adjust cumulative position if using velocity representation and fixing last frames
+        if keyframe_indices is not None:
+            indices_list = keyframe_indices if isinstance(keyframe_indices, list) else [keyframe_indices]
+            
+            # Check if we're fixing the last frames (negative start or high stop value)
+            has_last_frame_constraint = False
+            for kf_slice in indices_list:
+                start = kf_slice.start if kf_slice.start is not None else 0
+                if start < 0:
+                    has_last_frame_constraint = True
+                    break
+            
+            if has_last_frame_constraint:
+                # For velocity representation, we need to adjust the velocity values
+                # to ensure the cumulative position matches the target final position
+                
+                # Identify position/velocity channels (last 3 channels in the data)
+                # Get the target final position from the last fixed frame
+                target_last_frames = keyframe_motion[..., -1:]  # Last frame
+                synth_last_frames = synthesized[..., -1:]  # Last frame
+                
+                # Calculate position difference in the last 3 channels (position/velocity)
+                pos_channels_start = synthesized.shape[1] - 3
+                pos_diff = target_last_frames[:, pos_channels_start:, :] - synth_last_frames[:, pos_channels_start:, :]
+                
+                # Distribute the position correction as velocity adjustments across all frames
+                # This ensures smooth transition while reaching the target final position
+                num_frames = synthesized.shape[-1]
+                
+                # Apply a linear correction to velocity values
+                # Each frame gets a fraction of the correction
+                for i in range(num_frames):
+                    # Skip the fixed frames at the end
+                    if i >= num_frames - abs(start):
+                        continue
+                    
+                    # Calculate correction factor (gradually increasing)
+                    factor = (i + 1) / (num_frames - abs(start))
+                    
+                    # Apply velocity correction
+                    synthesized[:, pos_channels_start:, i] += pos_diff[:, :, 0] / (num_frames - abs(start))
 
         return synthesized, losses
 

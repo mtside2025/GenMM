@@ -64,10 +64,16 @@ args.add_argument('--num_stages_limit', type=int,
                   help='limit of the number of stages.')
 args.add_argument('--patch_size', type=int, help='patch size for generation.')
 args.add_argument('--loop', type=int, help='whether to loop the sequence.')
+args.add_argument('--keyframe_first_n', type=int, default=None,
+                  help='fix first N frames to match input motion (e.g., 5 for first 5 frames).')
+args.add_argument('--keyframe_last_n', type=int, default=None,
+                  help='fix last N frames to match input motion (e.g., 5 for last 5 frames).')
+args.add_argument('--fix_final_position', action='store_true',
+                  help='adjust cumulative position to match final position when using --keyframe_last_n (may cause foot sliding in locomotion).')
 args.add_argument('--keyframe_start', type=int, default=None,
-                  help='start frame index for keyframe fixing (e.g., 0).')
+                  help='[Advanced] start frame index for keyframe fixing (e.g., 0 for first frames, -5 for last 5 frames).')
 args.add_argument('--keyframe_end', type=int, default=None,
-                  help='end frame index for keyframe fixing (e.g., 10 for first 10 frames).')
+                  help='[Advanced] end frame index for keyframe fixing (e.g., 10 for first 10 frames, use -1 for None when using negative start).')
 cfg = ConfigParser(args)
 
 
@@ -102,11 +108,33 @@ def generate(cfg):
     model = GenMM(device=cfg.device, silent=True if cfg.mode == 'eval' else False)
     
     # Set keyframe indices if specified
-    if cfg.keyframe_start is not None and cfg.keyframe_end is not None:
-        GenMM.KEYFRAME_INDICES = slice(cfg.keyframe_start, cfg.keyframe_end)
-        print(f"Keyframe fixing enabled: frames {cfg.keyframe_start} to {cfg.keyframe_end}")
-    else:
+    keyframe_slices = []
+    
+    # Simple interface: first/last N frames
+    if cfg.keyframe_first_n is not None:
+        keyframe_slices.append(slice(0, cfg.keyframe_first_n))
+        print(f"Keyframe fixing enabled: first {cfg.keyframe_first_n} frames")
+    
+    if cfg.keyframe_last_n is not None:
+        keyframe_slices.append(slice(-cfg.keyframe_last_n, None))
+        print(f"Keyframe fixing enabled: last {cfg.keyframe_last_n} frames")
+    
+    # Advanced interface: custom start/end
+    if cfg.keyframe_start is not None:
+        end_idx = None if cfg.keyframe_end == -1 else cfg.keyframe_end
+        keyframe_slices.append(slice(cfg.keyframe_start, end_idx))
+        if end_idx is None:
+            print(f"Keyframe fixing enabled: frames from {cfg.keyframe_start} to end")
+        else:
+            print(f"Keyframe fixing enabled: frames {cfg.keyframe_start} to {end_idx}")
+    
+    # Set KEYFRAME_INDICES: single slice or list of slices
+    if len(keyframe_slices) == 0:
         GenMM.KEYFRAME_INDICES = None
+    elif len(keyframe_slices) == 1:
+        GenMM.KEYFRAME_INDICES = keyframe_slices[0]
+    else:
+        GenMM.KEYFRAME_INDICES = keyframe_slices
     
     criteria = PatchCoherentLoss(patch_size=cfg.patch_size, alpha=cfg.alpha, loop=cfg.loop, cache=True)
     syn = model.run(motion_data, criteria,
@@ -118,9 +146,58 @@ def generate(cfg):
                     pyr_factor=cfg.pyr_factor,
                     debug_dir=save_dir if cfg.mode == 'debug' else None)
     
+    # Post-process: adjust final position if last frames are fixed
+    if cfg.keyframe_last_n is not None and cfg.use_velo and cfg.fix_final_position:
+        print(f"Adjusting final position to match input motion...")
+        
+        # Get velocity mask (which axes are converted to velocity)
+        velo_mask = motion_data[0].motion_data.velo_mask
+        num_velo_axes = len(velo_mask)
+        
+        # Get the original input data in position form
+        input_motion_obj = BVHMotion(cfg.input, skeleton_name=cfg.skeleton_name, repr=cfg.repr,
+                                     use_velo=False, keep_up_pos=cfg.keep_up_pos, up_axis=cfg.up_axis, 
+                                     padding_last=cfg.padding_last,
+                                     requires_contact=cfg.requires_contact, joint_reduction=cfg.joint_reduction)
+        
+        input_pos_data = input_motion_obj.motion_data.data
+        target_final_pos = input_pos_data[:, -3:, -1].to(syn.device)  # Last frame's XYZ position
+        
+        # Convert synthesized velocity to position for adjustment
+        syn_begin_pos_backup = motion_data[0].motion_data.begin_pos.clone()
+        syn_pos = motion_data[0].motion_data.to_position(syn.clone())
+        current_final_pos = syn_pos[:, -3:, -1]
+        
+        # Calculate position offset needed
+        pos_offset = target_final_pos - current_final_pos
+        
+        # Apply offset gradually from start to end of non-fixed region
+        start_frame = cfg.keyframe_first_n if cfg.keyframe_first_n is not None else 0
+        end_frame = syn_pos.shape[-1] - cfg.keyframe_last_n
+        
+        if end_frame > start_frame:
+            # Gradually apply offset
+            for i in range(start_frame, end_frame):
+                alpha = (i - start_frame) / (end_frame - start_frame)
+                syn_pos[:, -3:, i] += pos_offset * alpha
+            
+            # Apply full offset to remaining frames before the fixed last frames
+            if end_frame < syn_pos.shape[-1]:
+                for i in range(end_frame, syn_pos.shape[-1]):
+                    syn_pos[:, -3:, i] += pos_offset
+        
+        # Convert back to velocity
+        motion_data[0].motion_data.begin_pos = None  # Reset before converting to velocity
+        syn = motion_data[0].motion_data.to_velocity(syn_pos)
+        motion_data[0].motion_data.begin_pos = syn_begin_pos_backup  # Restore for future use
+        print(f"Position adjusted. Offset applied: {pos_offset.squeeze().cpu().numpy()}")
+    
     # save the generated results
+    print(f"Saving results to: {save_dir}")
     os.makedirs(save_dir, exist_ok=True)
+    print(f"Directory created/verified: {save_dir}")
     motion_data[0].write(f"{save_dir}/syn.bvh", syn)
+    print(f"File saved: {save_dir}/syn.bvh")
 
     if cfg.post_precess:
         cmd = f"python fix_contact.py --prefix {osp.abspath(save_dir)} --name syn --skeleton_name={cfg.skeleton_name}"

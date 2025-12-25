@@ -53,6 +53,42 @@ python run_random_generation.py -i './data/Malcolm/Gangnam-Style.bvh'
 More configuration can be found in the `run_random_generation.py`.
 We use an Apple M1 and NVIDIA Tesla V100 with 32 GB RAM to generate each motion, which takes about ~0.2s and ~0.05s as mentioned in our paper.
 
+### Keyframe-Guided Generation
+You can fix specific frames from the input motion to guide the generation. This is useful for creating motion variations while preserving start/end poses or creating loopable animations.
+
+**Basic usage:**
+```sh
+# Fix first 5 frames
+python run_random_generation.py -i input.bvh --keyframe_first_n 5
+
+# Fix last 5 frames
+python run_random_generation.py -i input.bvh --keyframe_last_n 5
+
+# Fix both first and last 5 frames
+python run_random_generation.py -i input.bvh --keyframe_first_n 5 --keyframe_last_n 5
+```
+
+**Final position adjustment:**
+
+By default, fixing the last frames only matches the pose. To also match the final position exactly (important for looping or connecting motions), use `--fix_final_position`:
+
+```sh
+python run_random_generation.py -i input.bvh --keyframe_last_n 5 --fix_final_position
+```
+
+⚠️ **Note:** Using `--fix_final_position` may cause foot sliding in locomotion animations (walking, running). Only use it for stationary animations (dance, gestures) or when creating loops.
+
+**Advanced usage:**
+
+For custom frame ranges, use `--keyframe_start` and `--keyframe_end`:
+```sh
+# Fix frames 10-20
+python run_random_generation.py -i input.bvh --keyframe_start 10 --keyframe_end 20
+
+# Fix last 10 frames (using negative index)
+python run_random_generation.py -i input.bvh --keyframe_start -10 --keyframe_end -1
+```
+
 ## Blender add-on
 You can install and use the blender add-on with easy installation as our method is efficient and you do not need to install CUDA Toolkit.
 We test our code using blender 3.22.0, and will support 2.8.0 in the future.
