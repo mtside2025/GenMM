@@ -102,6 +102,84 @@ python run_random_generation.py -i input.bvh --keyframe_start 10 --keyframe_end 
 python run_random_generation.py -i input.bvh --keyframe_start -10 --keyframe_end -1
 ```
 
+### Additional Options
+
+**Output configuration:**
+```sh
+# Specify output directory (default: ./output)
+python run_random_generation.py -i input.bvh -o ./my_output
+
+# Set random seed for reproducibility
+python run_random_generation.py -i input.bvh -s 42
+
+# Use specific device (default: cuda:0)
+python run_random_generation.py -i input.bvh -d cpu
+python run_random_generation.py -i input.bvh -d cuda:1
+
+# Use config file (default: ./configs/default.yaml)
+python run_random_generation.py -i input.bvh -c ./configs/ganimator.yaml
+
+# Enable debug mode to save intermediate results
+python run_random_generation.py -i input.bvh -m debug
+```
+
+**Motion representation:**
+```sh
+# Rotation representation (default: repr6d)
+python run_random_generation.py -i input.bvh --repr quat    # quaternion
+python run_random_generation.py -i input.bvh --repr euler   # euler angles
+
+# Use velocity representation (default: 1)
+python run_random_generation.py -i input.bvh --use_velo 0   # use positions instead
+
+# Keep Y-axis position when using velocity (default: 0)
+python run_random_generation.py -i input.bvh --keep_up_pos 1
+
+# Specify up axis (default: Y_UP)
+python run_random_generation.py -i input.bvh --up_axis Z_UP
+```
+
+**Generation parameters:**
+```sh
+# Output length specification
+python run_random_generation.py -i input.bvh --num_frames 200    # exact frame count
+python run_random_generation.py -i input.bvh --num_frames 2x     # 2x input length
+python run_random_generation.py -i input.bvh --duration 5.0      # 5 seconds
+
+# Completeness/diversity trade-off (default: 0.01, higher = more diverse)
+python run_random_generation.py -i input.bvh --alpha 0.05
+
+# Patch size for matching (default: 11)
+python run_random_generation.py -i input.bvh --patch_size 15
+
+# Optimization steps per pyramid level (default: 3)
+python run_random_generation.py -i input.bvh --num_steps 5
+
+# Noise level for initialization (default: 10.0)
+python run_random_generation.py -i input.bvh --noise_sigma 5.0
+
+# Pyramid upsampling factor (default: 0.75)
+python run_random_generation.py -i input.bvh --pyr_factor 0.8
+
+# Create looping animation
+python run_random_generation.py -i input.bvh --loop 1
+```
+
+**Skeleton configuration:**
+```sh
+# Use predefined skeleton (mixamo, xia, crab_dance)
+python run_random_generation.py -i input.bvh --skeleton_name mixamo
+
+# Enable joint reduction to simplify skeleton
+python run_random_generation.py -i input.bvh --joint_reduction 1 --skeleton_name mixamo
+
+# Add contact labels for feet
+python run_random_generation.py -i input.bvh --requires_contact 1 --skeleton_name mixamo
+
+# Post-process with IK to fix foot contact
+python run_random_generation.py -i input.bvh --post_precess
+```
+
 ## Blender add-on
 You can install and use the blender add-on with easy installation as our method is efficient and you do not need to install CUDA Toolkit.
 We test our code using blender 3.22.0, and will support 2.8.0 in the future.
