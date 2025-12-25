@@ -7,6 +7,9 @@ import torch.nn.functional as F
 from utils.base import logger
 
 class GenMM:
+    # Keyframe indices to fix during generation (None = disabled)
+    KEYFRAME_INDICES = None
+    
     def __init__(self, mode = 'random_synthesis', noise_sigma = 1.0, coarse_ratio = 0.2, coarse_ratio_factor = 6, pyr_factor = 0.75, num_stages_limit = -1, device = 'cuda:0', silent = False):
         '''
         GenMM main constructor
@@ -162,8 +165,9 @@ class GenMM:
             synthesized, loss = criteria(synthesized, targets, ext=ext, return_blended_results=True)
 
             # Manually set the keyframes in synthesized motion to be the ones from the input motion
-            if syn_length >= keyframe_indices.stop and km_length >= keyframe_indices.stop:
-                synthesized[..., keyframe_indices] = keyframe_motion[..., keyframe_indices]
+            if keyframe_indices is not None:
+                if syn_length >= keyframe_indices.stop and km_length >= keyframe_indices.stop:
+                    synthesized[..., keyframe_indices] = keyframe_motion[..., keyframe_indices]
 
             # Update status
             losses.append(loss.item())

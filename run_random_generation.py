@@ -64,6 +64,10 @@ args.add_argument('--num_stages_limit', type=int,
                   help='limit of the number of stages.')
 args.add_argument('--patch_size', type=int, help='patch size for generation.')
 args.add_argument('--loop', type=int, help='whether to loop the sequence.')
+args.add_argument('--keyframe_start', type=int, default=None,
+                  help='start frame index for keyframe fixing (e.g., 0).')
+args.add_argument('--keyframe_end', type=int, default=None,
+                  help='end frame index for keyframe fixing (e.g., 10 for first 10 frames).')
 cfg = ConfigParser(args)
 
 
@@ -93,6 +97,14 @@ def generate(cfg):
 
     # perform the generation
     model = GenMM(device=cfg.device, silent=True if cfg.mode == 'eval' else False)
+    
+    # Set keyframe indices if specified
+    if cfg.keyframe_start is not None and cfg.keyframe_end is not None:
+        GenMM.KEYFRAME_INDICES = slice(cfg.keyframe_start, cfg.keyframe_end)
+        print(f"Keyframe fixing enabled: frames {cfg.keyframe_start} to {cfg.keyframe_end}")
+    else:
+        GenMM.KEYFRAME_INDICES = None
+    
     criteria = PatchCoherentLoss(patch_size=cfg.patch_size, alpha=cfg.alpha, loop=cfg.loop, cache=True)
     syn = model.run(motion_data, criteria,
                     num_frames=cfg.num_frames,
