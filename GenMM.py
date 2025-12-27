@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from utils.base import logger
 from utils.velocity_profile import VelocityProfileConstraint, parse_velocity_profile_args
+from nearest_neighbor.velocity_loss import VelocityProfileLoss, CombinedLoss
 
 class GenMM:
     # Keyframe indices to fix during generation (None = disabled)
@@ -131,6 +132,10 @@ class GenMM:
             )
             if not self.silent:
                 print(f'Velocity profile: {profile_constraint}')
+            
+            # Wrap criteria with velocity loss
+            velocity_loss = VelocityProfileLoss(profile_constraint, weight=velocity_profile.get('loss_weight', 0.1))
+            criteria = CombinedLoss(criteria, velocity_loss)
         else:
             profile_constraint = None
 
@@ -180,7 +185,8 @@ class GenMM:
         keyframe_indices = GenMM.KEYFRAME_INDICES
 
         for _i in range(n_steps):
-            synthesized, loss = criteria(synthesized, targets, ext=ext, return_blended_results=True)
+            # Pass use_velo=True to combined loss (assuming velocity representation)
+            synthesized, loss = criteria(synthesized, targets, ext=ext, return_blended_results=True, use_velo=True)
 
             # Manually set the keyframes in synthesized motion to be the ones from the input motion
             # Do this BEFORE applying velocity constraint so constraint can affect keyframes too

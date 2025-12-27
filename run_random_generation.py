@@ -81,9 +81,11 @@ args.add_argument('--velocity_profile', type=str, default=None,
                   choices=['linear_decel', 'linear_accel', 'smooth_decel', 'smooth_accel', 'constant', 'ease_in_out'],
                   help='velocity profile type for temporal consistency.')
 args.add_argument('--start_speed', type=float, default=None,
-                  help='starting velocity in m/s (used with --velocity_profile).')
+                  help='starting velocity multiplier (e.g., 1.0 = original speed, 1.5 = 1.5x speed).')
 args.add_argument('--end_speed', type=float, default=None,
-                  help='ending velocity in m/s (used with --velocity_profile).')
+                  help='ending velocity multiplier (e.g., 1.0 = original speed, 0.5 = 0.5x speed).')
+args.add_argument('--velocity_loss_weight', type=float, default=0.1,
+                  help='weight of velocity profile loss relative to patch coherence loss.')
 cfg = ConfigParser(args)
 
 
@@ -183,7 +185,8 @@ def generate(cfg):
     velocity_profile_config = parse_velocity_profile_args(
         cfg.velocity_profile, 
         cfg.start_speed, 
-        cfg.end_speed
+        cfg.end_speed,
+        cfg.velocity_loss_weight
     )
     
     syn = model.run(motion_data, criteria,

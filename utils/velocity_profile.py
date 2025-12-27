@@ -212,14 +212,15 @@ class VelocityProfileConstraint:
                 f"end={self.end_speed:.2f})")
 
 
-def parse_velocity_profile_args(velocity_profile, start_speed, end_speed):
+def parse_velocity_profile_args(velocity_profile, start_speed, end_speed, loss_weight=0.1):
     """
     Parse velocity profile arguments from command line.
     
     Args:
         velocity_profile: Profile type string or None
-        start_speed: Starting speed value or None
-        end_speed: Ending speed value or None
+        start_speed: Starting speed multiplier or None
+        end_speed: Ending speed multiplier or None
+        loss_weight: Weight of velocity loss (default: 0.1)
     
     Returns:
         Dictionary with velocity profile configuration or None
@@ -230,7 +231,9 @@ def parse_velocity_profile_args(velocity_profile, start_speed, end_speed):
     config = {
         'type': velocity_profile,
         'start_speed': start_speed if start_speed is not None else 1.0,
-        'end_speed': end_speed if end_speed is not None else 0.0
+        'end_speed': end_speed if end_speed is not None else 0.0,
+        'loss_weight': loss_weight
     }
     
     return config
+
