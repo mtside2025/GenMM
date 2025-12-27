@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from utils.base import logger
+from utils.velocity_profile import VelocityProfileConstraint, parse_velocity_profile_args
 
 class GenMM:
     # Keyframe indices to fix during generation (None = disabled)
@@ -81,7 +82,7 @@ class GenMM:
 
         return initial_motion_w_noise
 
-    def run(self, target, criteria, num_frames, num_steps, noise_sigma, patch_size, coarse_ratio, pyr_factor, ext=None, debug_dir=None):
+    def run(self, target, criteria, num_frames, num_steps, noise_sigma, patch_size, coarse_ratio, pyr_factor, ext=None, debug_dir=None, velocity_profile=None):
         '''
         generation function
         Args:
@@ -91,6 +92,8 @@ class GenMM:
             coarse_ratio     : float = 0.2, ratio at the coarse level.
             pyr_factor       : float = 0.75, pyramid factor.
             num_stages_limit : int = -1, no limit.
+            velocity_profile : dict or None, velocity profile configuration
+                             : {'type': str, 'start_speed': float, 'end_speed': float}
         '''
         if debug_dir is not None:
             from tensorboardX import SummaryWriter
@@ -117,6 +120,20 @@ class GenMM:
             print('Synthesized lengths:', self.synthesized_lengths)
         self.synthesized = self._get_initial_motion(self.synthesized_lengths[0], noise_sigma)
 
+        # create velocity profile constraint if specified
+        if velocity_profile is not None:
+            profile_constraint = VelocityProfileConstraint(
+                total_frames=syn_length,
+                profile_type=velocity_profile['type'],
+                start_speed=velocity_profile['start_speed'],
+                end_speed=velocity_profile['end_speed'],
+                device=self.device
+            )
+            if not self.silent:
+                print(f'Velocity profile: {profile_constraint}')
+        else:
+            profile_constraint = None
+
         # perform the optimization
         self.synthesized.requires_grad_(False)
         self.pbar = logger(num_steps, len(self.target_pyramid))
@@ -126,7 +143,7 @@ class GenMM:
                 with torch.no_grad():
                     self.synthesized = F.interpolate(self.synthesized.detach(), size=self.synthesized_lengths[lvl], mode='linear')
 
-            self.synthesized, losses = GenMM.match_and_blend(self.synthesized, lvl_target, criteria, num_steps, self.pbar, ext=ext)
+            self.synthesized, losses = GenMM.match_and_blend(self.synthesized, lvl_target, criteria, num_steps, self.pbar, ext=ext, profile_constraint=profile_constraint)
 
             criteria.clean_cache()
             if debug_dir is not None:
@@ -139,16 +156,17 @@ class GenMM:
 
     @staticmethod
     @torch.no_grad()
-    def match_and_blend(synthesized, targets, criteria, n_steps, pbar, ext=None):
+    def match_and_blend(synthesized, targets, criteria, n_steps, pbar, ext=None, profile_constraint=None):
         '''
         Minimizes criteria between synthesized and target
         Args:
-            synthesized    : torch.Tensor, optimized motion data
-            targets        : torch.Tensor, target motion data
-            criteria       : optimize target function
-            n_steps        : int, number of steps to optimize
-            pbar           : logger
-            ext            : extra configurations or constraints (optional)
+            synthesized       : torch.Tensor, optimized motion data
+            targets           : torch.Tensor, target motion data
+            criteria          : optimize target function
+            n_steps           : int, number of steps to optimize
+            pbar              : logger
+            ext               : extra configurations or constraints (optional)
+            profile_constraint: VelocityProfileConstraint or None, velocity profile to enforce
         '''
         losses = []
         keyframe_motion = targets[0] if isinstance(targets, list) else targets
@@ -163,6 +181,10 @@ class GenMM:
 
         for _i in range(n_steps):
             synthesized, loss = criteria(synthesized, targets, ext=ext, return_blended_results=True)
+
+            # Apply velocity profile constraint if specified
+            if profile_constraint is not None:
+                synthesized = profile_constraint.apply_constraint(synthesized, use_velo=True)
 
             # Manually set the keyframes in synthesized motion to be the ones from the input motion
             if keyframe_indices is not None:
