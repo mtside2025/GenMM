@@ -104,8 +104,8 @@ class VelocityProfileConstraint:
             # If using position representation, velocity constraint doesn't apply directly
             return synthesized
         
-        # For constant profile with same start/end speed, do nothing
-        if self.profile_type == 'constant' or self.start_speed == self.end_speed:
+        # For constant profile with same start/end speed, do nothing (keep original speed)
+        if self.profile_type == 'constant' and self.start_speed == self.end_speed:
             return synthesized
         
         # Clone to avoid modifying original
@@ -131,8 +131,10 @@ class VelocityProfileConstraint:
         target_speed = self.target_speeds[:synthesized.shape[-1]].to(synthesized.device)
         
         # Compute RELATIVE scaling factor based on velocity profile
-        # Normalize target speeds by start_speed to get relative scaling
-        relative_scale = target_speed / self.start_speed
+        # target_speed represents the desired multiplier relative to original motion
+        # For constant profile: start_speed=1.5 means "scale all velocities to 1.5x"
+        # For varying profiles: use the profile curve directly as multipliers
+        relative_scale = target_speed
         
         # Apply relative scaling to velocities
         epsilon = 1e-6

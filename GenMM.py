@@ -182,33 +182,23 @@ class GenMM:
         for _i in range(n_steps):
             synthesized, loss = criteria(synthesized, targets, ext=ext, return_blended_results=True)
 
-            # Apply velocity profile constraint if specified
-            if profile_constraint is not None:
-                synthesized = profile_constraint.apply_constraint(synthesized, use_velo=True)
-
             # Manually set the keyframes in synthesized motion to be the ones from the input motion
+            # Do this BEFORE applying velocity constraint so constraint can affect keyframes too
             if keyframe_indices is not None:
                 # Handle both single slice and list of slices
                 indices_list = keyframe_indices if isinstance(keyframe_indices, list) else [keyframe_indices]
                 
                 for kf_slice in indices_list:
                     # Check if the indices are valid for both tensors
-                    # For negative indices or None stop, always apply if start is valid
-                    start = kf_slice.start if kf_slice.start is not None else 0
-                    stop = kf_slice.stop
-                    
-                    # Handle negative start index
-                    if start < 0:
-                        start_syn = syn_length + start
-                        start_km = km_length + start
+                    if keyframe_motion.shape[-1] > synthesized.shape[-1]:
+                        synthesized[:, :, kf_slice] = keyframe_motion[:, :, kf_slice.start:kf_slice.start + (kf_slice.stop - kf_slice.start)]
                     else:
-                        start_syn = start
-                        start_km = start
-                    
-                    # Only apply if both tensors have enough frames for the start index
-                    if start_syn >= 0 and start_km >= 0 and start_syn < syn_length and start_km < km_length:
-                        if stop is None or (syn_length >= stop and km_length >= stop):
-                            synthesized[..., kf_slice] = keyframe_motion[..., kf_slice]
+                        synthesized[:, :, kf_slice] = keyframe_motion[:, :, kf_slice]
+
+            # Apply velocity profile constraint if specified
+            # Do this AFTER keyframes are set so we can modify the full motion including keyframes
+            if profile_constraint is not None:
+                synthesized = profile_constraint.apply_constraint(synthesized, use_velo=True)
 
             # Update status
             losses.append(loss.item())

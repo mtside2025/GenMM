@@ -51,7 +51,7 @@ def test_relative_scaling_2x():
     synthesized[:, -3, :] = 0.05  # ΔX = 0.05
     synthesized[:, -1, :] = 0.00  # ΔZ = 0.00
     
-    # Apply constraint (should NOT do anything for same start/end)
+    # Apply constraint (should NOT do anything for same start/end in constant profile)
     result = constraint.apply_constraint(synthesized, use_velo=True)
     
     # For constant profile with same start/end, should return unchanged
@@ -60,13 +60,43 @@ def test_relative_scaling_2x():
     
     print(f"\nOriginal velocity: {original_vel.mean():.6f} m/frame")
     print(f"Result velocity: {result_vel.mean():.6f} m/frame")
-    print(f"Expected: Same as original (constant profile optimization)")
+    print(f"Expected: Same as original (constant profile with same start/end optimization)")
     
-    # Note: With the current implementation, constant profile does nothing
-    # This is actually correct behavior - constant profile maintains existing speed
+    # With same start/end in constant profile, early return keeps original
     assert torch.allclose(result_vel, original_vel, atol=1e-6), \
-        "Constant profile should not change speed"
+        "Constant profile with same start/end should not change speed"
     print("✓ Test passed: constant profile is correctly optimized")
+
+
+def test_relative_scaling_1_5x():
+    """Test that start_speed=1.5 with linear profile increases velocity by 1.5x."""
+    constraint = VelocityProfileConstraint(
+        profile_type='linear_decel',
+        start_speed=1.5,
+        end_speed=1.5,  # Same speed = constant 1.5x throughout
+        total_frames=100
+    )
+    
+    # Create sample motion with velocity 0.05 m/frame
+    synthesized = torch.zeros((1, 99, 100))
+    synthesized[:, -3, :] = 0.05  # ΔX = 0.05
+    synthesized[:, -1, :] = 0.00  # ΔZ = 0.00
+    
+    # Apply constraint
+    result = constraint.apply_constraint(synthesized, use_velo=True)
+    
+    original_vel = torch.sqrt(synthesized[:, -3, :]**2 + synthesized[:, -1, :]**2)
+    result_vel = torch.sqrt(result[:, -3, :]**2 + result[:, -1, :]**2)
+    
+    print(f"\nOriginal velocity: {original_vel.mean():.6f} m/frame")
+    print(f"Result velocity: {result_vel.mean():.6f} m/frame (expected: ~0.075, 1.5x)")
+    print(f"Scaling factor: {result_vel.mean() / original_vel.mean():.2f}x")
+    
+    # Check that all velocities are scaled to 1.5x
+    assert torch.allclose(result_vel, 1.5 * original_vel, atol=0.001), \
+        f"All velocities should be 1.5x: mean {result_vel.mean():.6f} vs {1.5 * original_vel.mean():.6f}"
+    
+    print("✓ Test passed: 1.5x constant scaling works correctly")
 
 
 def test_linear_deceleration():
@@ -142,6 +172,7 @@ def test_no_extreme_amplification():
 if __name__ == '__main__':
     test_constant_profile_with_1_0_maintains_speed()
     test_relative_scaling_2x()
+    test_relative_scaling_1_5x()
     test_linear_deceleration()
     test_no_extreme_amplification()
     print("\n✓✓✓ All tests passed! ✓✓✓")
