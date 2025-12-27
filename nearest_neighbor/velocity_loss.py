@@ -45,29 +45,34 @@ class VelocityProfileLoss(nn.Module):
         # Compute current horizontal speed at each frame
         current_speed = torch.sqrt(vel_x**2 + vel_z**2)
         
-        # Get target speeds
-        target_speed = self.profile_constraint.target_speeds[:synthesized.shape[-1]].to(synthesized.device)
+        # Get target speeds and interpolate to current sequence length
+        current_len = synthesized.shape[-1]
+        full_target_speeds = self.profile_constraint.target_speeds.to(synthesized.device)
         
-        # Compute average speed to normalize the loss
+        if current_len != len(full_target_speeds):
+            # Interpolate target speeds to match current sequence length
+            target_speed = torch.nn.functional.interpolate(
+                full_target_speeds.unsqueeze(0).unsqueeze(0),
+                size=current_len,
+                mode='linear',
+                align_corners=True
+            ).squeeze()
+        else:
+            target_speed = full_target_speeds[:current_len]
+        
+        # Compute average speed to normalize
         avg_speed = current_speed.mean()
         if avg_speed < 1e-6:
             return torch.tensor(0.0, device=synthesized.device)
         
-        # Two-part loss:
-        # 1. Relative speed profile (shape of the curve)
-        speed_ratio = current_speed / (avg_speed + 1e-6)
-        target_ratio = target_speed / target_speed.mean()
-        profile_loss = torch.mean((speed_ratio - target_ratio) ** 2)
+        # Simple MSE loss: encourage each frame's speed to match target
+        # Normalize by average speed to make loss scale-invariant
+        normalized_current = current_speed / (avg_speed + 1e-6)
+        normalized_target = target_speed / (target_speed.mean() + 1e-6)
         
-        # 2. Absolute speed scale (overall magnitude)
-        # Encourage average speed to match target average
-        target_avg = target_speed.mean()
-        scale_loss = (avg_speed / (target_avg + 1e-6) - 1.0) ** 2
+        loss = torch.mean((normalized_current - normalized_target) ** 2)
         
-        # Combine losses (profile shape is primary, scale is gentle guidance)
-        total_loss = profile_loss + 0.01 * scale_loss
-        
-        return self.weight * total_loss
+        return self.weight * loss
 
 
 class CombinedLoss(nn.Module):

@@ -85,18 +85,15 @@ class VelocityProfileConstraint:
         
         return speeds
     
-    def apply_constraint(self, synthesized, use_velo=True, exclude_frames=None):
+    def apply_constraint(self, synthesized, use_velo=True):
         """
         Apply velocity constraint to synthesized motion.
         
-        This applies a RELATIVE scaling based on the velocity profile.
-        For 'constant' profile, the motion is kept as-is.
-        For other profiles, velocities are scaled relative to the initial speed.
+        Simple velocity scaling: multiply the horizontal velocity by the target speed profile.
         
         Args:
             synthesized: (1, C, T) tensor of synthesized motion
             use_velo: Whether the data uses velocity representation
-            exclude_frames: List of frame indices or slices to exclude from constraint
         
         Returns:
             Constrained motion tensor with adjusted velocities
@@ -105,63 +102,33 @@ class VelocityProfileConstraint:
             # If using position representation, velocity constraint doesn't apply directly
             return synthesized
         
-        # For constant profile with same start/end speed, do nothing (keep original speed)
-        if self.profile_type == 'constant' and self.start_speed == self.end_speed:
-            return synthesized
-        
         # Clone to avoid modifying original
         constrained = synthesized.clone()
         
         # Extract velocity channels (last 3 channels: ΔX, Y, ΔZ)
-        # Assuming data format: [..., ΔX, Y, ΔZ]
         vel_x = constrained[:, -3, :]  # ΔX (horizontal velocity)
-        vel_y = constrained[:, -2, :]  # Y (vertical position/velocity)
         vel_z = constrained[:, -1, :]  # ΔZ (horizontal velocity)
         
-        # Compute current horizontal speed at each frame
-        current_speed = torch.sqrt(vel_x**2 + vel_z**2)
+        # Get target speeds and interpolate to current sequence length (for pyramid optimization)
+        current_len = synthesized.shape[-1]
+        full_target_speeds = self.target_speeds.to(synthesized.device)
         
-        # Calculate average speed of the motion to use as reference
-        avg_speed = current_speed.mean()
-        
-        if avg_speed < 1e-6:
-            # Motion has no horizontal movement, skip constraint
-            return synthesized
-        
-        # Get target speeds (ensure same device)
-        target_speed = self.target_speeds[:synthesized.shape[-1]].to(synthesized.device)
-        
-        # Compute RELATIVE scaling factor based on velocity profile
-        # target_speed represents the desired multiplier relative to original motion
-        # For constant profile: start_speed=1.5 means "scale all velocities to 1.5x"
-        # For varying profiles: use the profile curve directly as multipliers
-        relative_scale = target_speed
-        
-        # Create mask for frames to apply constraint
-        apply_mask = torch.ones_like(current_speed, dtype=torch.bool)
-        if exclude_frames is not None:
-            for frames in exclude_frames:
-                if isinstance(frames, slice):
-                    start = frames.start if frames.start is not None else 0
-                    stop = frames.stop if frames.stop is not None else apply_mask.shape[0]
-                    apply_mask[start:stop] = False
-                else:
-                    apply_mask[frames] = False
-        
-        # Apply relative scaling to velocities
-        epsilon = 1e-6
-        scale = torch.where(
-            current_speed > epsilon,
-            relative_scale,
-            torch.ones_like(current_speed)
-        )
-        
-        # Only apply scaling to non-excluded frames
-        scale = torch.where(apply_mask, scale, torch.ones_like(scale))
+        if current_len != len(full_target_speeds):
+            # Interpolate target speeds to match current sequence length
+            import torch.nn.functional as F
+            target_speed = F.interpolate(
+                full_target_speeds.unsqueeze(0).unsqueeze(0),
+                size=current_len,
+                mode='linear',
+                align_corners=True
+            ).squeeze()
+        else:
+            target_speed = full_target_speeds
         
         # Apply scaling to horizontal velocity components
-        constrained[:, -3, :] = vel_x * scale  # ΔX
-        constrained[:, -1, :] = vel_z * scale  # ΔZ
+        # target_speed is a multiplier (e.g., 1.5 = 1.5x faster)
+        constrained[:, -3, :] = vel_x * target_speed  # ΔX
+        constrained[:, -1, :] = vel_z * target_speed  # ΔZ
         # Note: Y (vertical) is not scaled to preserve jumps/stairs
         
         return constrained

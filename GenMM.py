@@ -11,6 +11,10 @@ from nearest_neighbor.velocity_loss import VelocityProfileLoss, CombinedLoss
 class GenMM:
     # Keyframe indices to fix during generation (None = disabled)
     KEYFRAME_INDICES = None
+    # Original motion SOURCE for keyframe relative movement (file path or data)
+    ORIGINAL_MOTION_SOURCE = None
+    # Cached position data from original motion (loaded once, reused)
+    _CACHED_POSITION_DATA = None
     
     def __init__(self, mode = 'random_synthesis', noise_sigma = 1.0, coarse_ratio = 0.2, coarse_ratio_factor = 6, pyr_factor = 0.75, num_stages_limit = -1, device = 'cuda:0', silent = False):
         '''
@@ -96,10 +100,20 @@ class GenMM:
             velocity_profile : dict or None, velocity profile configuration
                              : {'type': str, 'start_speed': float, 'end_speed': float}
         '''
+        # Clear cached position data for each new generation
+        GenMM._CACHED_POSITION_DATA = None
+        
         if debug_dir is not None:
             from tensorboardX import SummaryWriter
             writer = SummaryWriter(log_dir=debug_dir)
 
+        # Save original motion SOURCE for keyframe relative movement calculation
+        # Store the motion object so we can get raw position data later
+        if isinstance(target, list) and len(target) > 0:
+            GenMM.ORIGINAL_MOTION_SOURCE = target[0]
+        else:
+            GenMM.ORIGINAL_MOTION_SOURCE = target
+        
         # build target pyramid
         if 'patchsize' in coarse_ratio:
             coarse_ratio = patch_size * float(coarse_ratio.split('x_')[0]) / max([len(t.motion_data) for t in target])
@@ -148,7 +162,7 @@ class GenMM:
                 with torch.no_grad():
                     self.synthesized = F.interpolate(self.synthesized.detach(), size=self.synthesized_lengths[lvl], mode='linear')
 
-            self.synthesized, losses = GenMM.match_and_blend(self.synthesized, lvl_target, criteria, num_steps, self.pbar, ext=ext, profile_constraint=profile_constraint)
+            self.synthesized, losses = GenMM.match_and_blend(self.synthesized, lvl_target, criteria, num_steps, self.pbar, ext=ext, profile_constraint=profile_constraint, pyramid_level=lvl, total_levels=len(self.target_pyramid))
 
             criteria.clean_cache()
             if debug_dir is not None:
@@ -161,7 +175,7 @@ class GenMM:
 
     @staticmethod
     @torch.no_grad()
-    def match_and_blend(synthesized, targets, criteria, n_steps, pbar, ext=None, profile_constraint=None):
+    def match_and_blend(synthesized, targets, criteria, n_steps, pbar, ext=None, profile_constraint=None, pyramid_level=0, total_levels=5):
         '''
         Minimizes criteria between synthesized and target
         Args:
@@ -172,6 +186,8 @@ class GenMM:
             pbar              : logger
             ext               : extra configurations or constraints (optional)
             profile_constraint: VelocityProfileConstraint or None, velocity profile to enforce
+            pyramid_level     : int, current pyramid level (0=coarsest)
+            total_levels      : int, total number of pyramid levels
         '''
         losses = []
         keyframe_motion = targets[0] if isinstance(targets, list) else targets
@@ -188,70 +204,27 @@ class GenMM:
             # Pass use_velo=True to combined loss (assuming velocity representation)
             synthesized, loss = criteria(synthesized, targets, ext=ext, return_blended_results=True, use_velo=True)
 
-            # Manually set the keyframes in synthesized motion to be the ones from the input motion
-            # Do this BEFORE applying velocity constraint so constraint can affect keyframes too
+            # Manually set the keyframes in synthesized motion
             if keyframe_indices is not None:
                 # Handle both single slice and list of slices
                 indices_list = keyframe_indices if isinstance(keyframe_indices, list) else [keyframe_indices]
                 
                 for kf_slice in indices_list:
-                    # Check if the indices are valid for both tensors
+                    # Simple keyframe fixing: copy all channels from keyframe motion
                     if keyframe_motion.shape[-1] > synthesized.shape[-1]:
+                        # Interpolate keyframe_motion to match synthesized length
                         synthesized[:, :, kf_slice] = keyframe_motion[:, :, kf_slice.start:kf_slice.start + (kf_slice.stop - kf_slice.start)]
                     else:
                         synthesized[:, :, kf_slice] = keyframe_motion[:, :, kf_slice]
 
-            # Apply velocity profile constraint if specified
-            # Do this AFTER keyframes are set so we can modify the full motion including keyframes
-            if profile_constraint is not None:
-                synthesized = profile_constraint.apply_constraint(synthesized, use_velo=True, exclude_frames=None)
+            # Apply velocity profile constraint if specified (only at final pyramid level)
+            if profile_constraint is not None and pyramid_level == total_levels - 1:
+                synthesized = profile_constraint.apply_constraint(synthesized, use_velo=True)
 
             # Update status
             losses.append(loss.item())
             pbar.step()
             pbar.print()
-
-        # Post-process: adjust cumulative position if using velocity representation and fixing last frames
-        if keyframe_indices is not None:
-            indices_list = keyframe_indices if isinstance(keyframe_indices, list) else [keyframe_indices]
-            
-            # Check if we're fixing the last frames (negative start or high stop value)
-            has_last_frame_constraint = False
-            for kf_slice in indices_list:
-                start = kf_slice.start if kf_slice.start is not None else 0
-                if start < 0:
-                    has_last_frame_constraint = True
-                    break
-            
-            if has_last_frame_constraint:
-                # For velocity representation, we need to adjust the velocity values
-                # to ensure the cumulative position matches the target final position
-                
-                # Identify position/velocity channels (last 3 channels in the data)
-                # Get the target final position from the last fixed frame
-                target_last_frames = keyframe_motion[..., -1:]  # Last frame
-                synth_last_frames = synthesized[..., -1:]  # Last frame
-                
-                # Calculate position difference in the last 3 channels (position/velocity)
-                pos_channels_start = synthesized.shape[1] - 3
-                pos_diff = target_last_frames[:, pos_channels_start:, :] - synth_last_frames[:, pos_channels_start:, :]
-                
-                # Distribute the position correction as velocity adjustments across all frames
-                # This ensures smooth transition while reaching the target final position
-                num_frames = synthesized.shape[-1]
-                
-                # Apply a linear correction to velocity values
-                # Each frame gets a fraction of the correction
-                for i in range(num_frames):
-                    # Skip the fixed frames at the end
-                    if i >= num_frames - abs(start):
-                        continue
-                    
-                    # Calculate correction factor (gradually increasing)
-                    factor = (i + 1) / (num_frames - abs(start))
-                    
-                    # Apply velocity correction
-                    synthesized[:, pos_channels_start:, i] += pos_diff[:, :, 0] / (num_frames - abs(start))
 
         return synthesized, losses
 

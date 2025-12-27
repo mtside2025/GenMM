@@ -180,6 +180,14 @@ def generate(cfg):
     
     criteria = PatchCoherentLoss(patch_size=cfg.patch_size, alpha=cfg.alpha, loop=cfg.loop, cache=True)
     
+    # Validate velocity profile and keyframe compatibility
+    if cfg.velocity_profile is not None and cfg.keyframe_last_n is not None:
+        raise ValueError(
+            "velocity_profile cannot be used with keyframe_last_n. "
+            "Velocity scaling would override the fixed end frames. "
+            "Please use either velocity control OR keyframe fixing, not both."
+        )
+    
     # Parse velocity profile configuration
     from utils.velocity_profile import parse_velocity_profile_args
     velocity_profile_config = parse_velocity_profile_args(
