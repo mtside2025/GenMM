@@ -89,6 +89,10 @@ class VelocityProfileConstraint:
         """
         Apply velocity constraint to synthesized motion.
         
+        This applies a RELATIVE scaling based on the velocity profile.
+        For 'constant' profile, the motion is kept as-is.
+        For other profiles, velocities are scaled relative to the initial speed.
+        
         Args:
             synthesized: (1, C, T) tensor of synthesized motion
             use_velo: Whether the data uses velocity representation
@@ -98,6 +102,10 @@ class VelocityProfileConstraint:
         """
         if not use_velo:
             # If using position representation, velocity constraint doesn't apply directly
+            return synthesized
+        
+        # For constant profile with same start/end speed, do nothing
+        if self.profile_type == 'constant' or self.start_speed == self.end_speed:
             return synthesized
         
         # Clone to avoid modifying original
@@ -112,15 +120,25 @@ class VelocityProfileConstraint:
         # Compute current horizontal speed at each frame
         current_speed = torch.sqrt(vel_x**2 + vel_z**2)
         
+        # Calculate average speed of the motion to use as reference
+        avg_speed = current_speed.mean()
+        
+        if avg_speed < 1e-6:
+            # Motion has no horizontal movement, skip constraint
+            return synthesized
+        
         # Get target speeds (ensure same device)
         target_speed = self.target_speeds[:synthesized.shape[-1]].to(synthesized.device)
         
-        # Compute scaling factor for each frame
-        # Avoid division by zero with epsilon
+        # Compute RELATIVE scaling factor based on velocity profile
+        # Normalize target speeds by start_speed to get relative scaling
+        relative_scale = target_speed / self.start_speed
+        
+        # Apply relative scaling to velocities
         epsilon = 1e-6
         scale = torch.where(
             current_speed > epsilon,
-            target_speed / (current_speed + epsilon),
+            relative_scale,
             torch.ones_like(current_speed)
         )
         
