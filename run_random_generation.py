@@ -76,6 +76,16 @@ args.add_argument('--keyframe_start', type=int, default=None,
                   help='[Advanced] start frame index for keyframe fixing (e.g., 0 for first frames, -5 for last 5 frames).')
 args.add_argument('--keyframe_end', type=int, default=None,
                   help='[Advanced] end frame index for keyframe fixing (e.g., 10 for first 10 frames, use -1 for None when using negative start).')
+# velocity profile arguments
+args.add_argument('--velocity_profile', type=str, default=None,
+                  choices=['linear_decel', 'linear_accel', 'smooth_decel', 'smooth_accel', 'constant', 'ease_in_out'],
+                  help='velocity profile type for temporal consistency.')
+args.add_argument('--start_speed', type=float, default=None,
+                  help='starting velocity multiplier (e.g., 1.0 = original speed, 1.5 = 1.5x speed).')
+args.add_argument('--end_speed', type=float, default=None,
+                  help='ending velocity multiplier (e.g., 1.0 = original speed, 0.5 = 0.5x speed).')
+args.add_argument('--velocity_loss_weight', type=float, default=0.1,
+                  help='weight of velocity profile loss relative to patch coherence loss.')
 cfg = ConfigParser(args)
 
 
@@ -169,6 +179,24 @@ def generate(cfg):
         GenMM.KEYFRAME_INDICES = keyframe_slices
     
     criteria = PatchCoherentLoss(patch_size=cfg.patch_size, alpha=cfg.alpha, loop=cfg.loop, cache=True)
+    
+    # Validate velocity profile and keyframe compatibility
+    if cfg.velocity_profile is not None and cfg.keyframe_last_n is not None:
+        raise ValueError(
+            "velocity_profile cannot be used with keyframe_last_n. "
+            "Velocity scaling would override the fixed end frames. "
+            "Please use either velocity control OR keyframe fixing, not both."
+        )
+    
+    # Parse velocity profile configuration
+    from utils.velocity_profile import parse_velocity_profile_args
+    velocity_profile_config = parse_velocity_profile_args(
+        cfg.velocity_profile, 
+        cfg.start_speed, 
+        cfg.end_speed,
+        cfg.velocity_loss_weight
+    )
+    
     syn = model.run(motion_data, criteria,
                     num_frames=num_frames_to_use,
                     num_steps=cfg.num_steps,
@@ -176,7 +204,8 @@ def generate(cfg):
                     patch_size=cfg.patch_size, 
                     coarse_ratio=cfg.coarse_ratio,
                     pyr_factor=cfg.pyr_factor,
-                    debug_dir=debug_dir)
+                    debug_dir=debug_dir,
+                    velocity_profile=velocity_profile_config)
     
     # Post-process: adjust final position if last frames are fixed
     if cfg.keyframe_last_n is not None and cfg.use_velo and cfg.fix_final_position:

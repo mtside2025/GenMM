@@ -16,8 +16,12 @@ class PatchCoherentLoss(torch.nn.Module):
         if cache:
             self.cached_data = None
 
-    def forward(self, X, Ys, dist_wrapper=None, ext=None, return_blended_results=False):
-        """For each patch in input X find its NN in target Y and sum the their distances"""
+    def forward(self, X, Ys, dist_wrapper=None, ext=None, return_blended_results=False, use_velo=True):
+        """For each patch in input X find its NN in target Y and sum the their distances
+        
+        Args:
+            use_velo: Whether data uses velocity representation (for compatibility, not used here)
+        """
         assert X.shape[0] == 1, "Only support batch size of 1 for X"
         dist_fn = lambda X, Y: dist_wrapper(efficient_cdist, X, Y) if dist_wrapper is not None else efficient_cdist(X, Y)
 

@@ -102,6 +102,54 @@ python run_random_generation.py -i input.bvh --keyframe_start 10 --keyframe_end 
 python run_random_generation.py -i input.bvh --keyframe_start -10 --keyframe_end -1
 ```
 
+### Velocity Profile Control (NEW!)
+Control the speed of generated motion with velocity profile constraints. This allows you to generate faster or slower variations of the input motion while preserving its style and character.
+
+**Basic usage:**
+```sh
+# Generate motion at 1.5x speed
+python run_random_generation.py -i input.bvh \
+    --velocity_profile constant \
+    --start_speed 1.5 --end_speed 1.5 \
+    --velocity_loss_weight 0.1
+
+# Generate motion that decelerates from 2x to 0.5x speed
+python run_random_generation.py -i input.bvh \
+    --velocity_profile linear_decel \
+    --start_speed 2.0 --end_speed 0.5 \
+    --velocity_loss_weight 0.1
+```
+
+**Available velocity profiles:**
+- `constant`: Uniform speed throughout the motion
+- `linear_accel`: Linear acceleration from start_speed to end_speed
+- `linear_decel`: Linear deceleration from start_speed to end_speed  
+- `ease_in_out`: Smooth acceleration and deceleration with ease curves
+
+**Parameters:**
+- `--velocity_profile`: Type of velocity profile (required)
+- `--start_speed`: Speed multiplier at the start (e.g., 1.5 = 1.5x original speed)
+- `--end_speed`: Speed multiplier at the end
+- `--velocity_loss_weight`: How strongly to enforce the speed constraint (default: 0.1, range: 0.01-1.0)
+
+**Combining with keyframes:**
+```sh
+# OK: Fix start pose and control speed
+python run_random_generation.py -i input.bvh \
+    --velocity_profile constant --start_speed 1.5 --end_speed 1.5 \
+    --keyframe_first_n 5 \
+    --velocity_loss_weight 0.1
+```
+
+⚠️ **Important:** You **cannot** use `--velocity_profile` with `--keyframe_last_n` because velocity constraints modify the total distance traveled, which conflicts with fixing the end position. Use `--keyframe_first_n` only.
+
+**Weight tuning tips:**
+- Low weight (0.01-0.1): Gentle guidance, better preserves motion quality
+- Medium weight (0.1-0.3): Balanced (recommended for most cases)
+- High weight (0.5-1.0): Strong enforcement, may reduce motion naturalness
+
+See [HISTORY.md](HISTORY.md) for detailed implementation notes.
+
 ### Additional Options
 
 **Output configuration:**
