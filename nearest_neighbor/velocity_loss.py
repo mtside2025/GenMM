@@ -53,16 +53,21 @@ class VelocityProfileLoss(nn.Module):
         if avg_speed < 1e-6:
             return torch.tensor(0.0, device=synthesized.device)
         
-        # Compute relative speed error
-        # target_speed represents desired multipliers (e.g., 1.5 = 1.5x original speed)
-        # We want to penalize deviations from these multipliers
+        # Two-part loss:
+        # 1. Relative speed profile (shape of the curve)
         speed_ratio = current_speed / (avg_speed + 1e-6)
         target_ratio = target_speed / target_speed.mean()
+        profile_loss = torch.mean((speed_ratio - target_ratio) ** 2)
         
-        # MSE loss between current and target speed ratios
-        loss = torch.mean((speed_ratio - target_ratio) ** 2)
+        # 2. Absolute speed scale (overall magnitude)
+        # Encourage average speed to match target average
+        target_avg = target_speed.mean()
+        scale_loss = (avg_speed / (target_avg + 1e-6) - 1.0) ** 2
         
-        return self.weight * loss
+        # Combine losses (profile shape is primary, scale is gentle guidance)
+        total_loss = profile_loss + 0.01 * scale_loss
+        
+        return self.weight * total_loss
 
 
 class CombinedLoss(nn.Module):

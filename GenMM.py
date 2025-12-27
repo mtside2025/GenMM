@@ -204,7 +204,7 @@ class GenMM:
             # Apply velocity profile constraint if specified
             # Do this AFTER keyframes are set so we can modify the full motion including keyframes
             if profile_constraint is not None:
-                synthesized = profile_constraint.apply_constraint(synthesized, use_velo=True)
+                synthesized = profile_constraint.apply_constraint(synthesized, use_velo=True, exclude_frames=None)
 
             # Update status
             losses.append(loss.item())

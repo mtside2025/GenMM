@@ -85,7 +85,7 @@ class VelocityProfileConstraint:
         
         return speeds
     
-    def apply_constraint(self, synthesized, use_velo=True):
+    def apply_constraint(self, synthesized, use_velo=True, exclude_frames=None):
         """
         Apply velocity constraint to synthesized motion.
         
@@ -96,6 +96,7 @@ class VelocityProfileConstraint:
         Args:
             synthesized: (1, C, T) tensor of synthesized motion
             use_velo: Whether the data uses velocity representation
+            exclude_frames: List of frame indices or slices to exclude from constraint
         
         Returns:
             Constrained motion tensor with adjusted velocities
@@ -136,6 +137,17 @@ class VelocityProfileConstraint:
         # For varying profiles: use the profile curve directly as multipliers
         relative_scale = target_speed
         
+        # Create mask for frames to apply constraint
+        apply_mask = torch.ones_like(current_speed, dtype=torch.bool)
+        if exclude_frames is not None:
+            for frames in exclude_frames:
+                if isinstance(frames, slice):
+                    start = frames.start if frames.start is not None else 0
+                    stop = frames.stop if frames.stop is not None else apply_mask.shape[0]
+                    apply_mask[start:stop] = False
+                else:
+                    apply_mask[frames] = False
+        
         # Apply relative scaling to velocities
         epsilon = 1e-6
         scale = torch.where(
@@ -143,6 +155,9 @@ class VelocityProfileConstraint:
             relative_scale,
             torch.ones_like(current_speed)
         )
+        
+        # Only apply scaling to non-excluded frames
+        scale = torch.where(apply_mask, scale, torch.ones_like(scale))
         
         # Apply scaling to horizontal velocity components
         constrained[:, -3, :] = vel_x * scale  # ΔX
