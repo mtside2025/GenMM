@@ -2,6 +2,31 @@
 
 This document tracks major algorithm updates and feature additions to the GenMM system.
 
+## 2025-12-31: Processing Time Profiling
+
+### Overview
+Added comprehensive profiling functionality to measure and analyze processing time for performance optimization and debugging. The profiler tracks overall processing time, time per iteration, time per frame, and detailed breakdowns for each processing step.
+
+### Features
+- **Timing Measurement**: Automatic measurement of all major processing steps including pyramid building, interpolation, match-and-blend operations, and iteration steps
+- **Console Output**: English-only display with normalized iteration counts (e.g., "3 steps/level × 4 levels = 12 total")
+- **CSV Export**: Clean CSV files containing only timing statistics, with metadata encoded in filename
+- **Filename Format**: `*_profile_f{frames}_i{steps}x{levels}.csv` for easy identification and analysis
+- **Normalized Metrics**: Time per iteration calculated using steps per level (not total iterations) for consistent comparison across different pyramid sizes
+
+### Usage
+Enable profiling with the `--profile` flag:
+```bash
+python run_random_generation.py -i input.bvh --profile
+```
+
+Results are displayed in console and saved as CSV files alongside generated BVH files.
+
+### Implementation
+- **Core Module**: `utils/profiler.py` - Context manager-based timer with minimal overhead (<1%)
+- **Integration**: Modified `GenMM.py` and `run_random_generation.py` to instrument key processing steps
+- **Web Server**: Added profiling support to `run_web_server.py` with `--profile` flag
+
 ## 2025-12-27: Velocity Profile Constraints
 
 ### Overview

@@ -53,6 +53,56 @@ python run_random_generation.py -i './data/Malcolm/Gangnam-Style.bvh'
 More configuration can be found in the `run_random_generation.py`.
 We use an Apple M1 and NVIDIA Tesla V100 with 32 GB RAM to generate each motion, which takes about ~0.2s and ~0.05s as mentioned in our paper.
 
+### Processing Time Profiling (NEW!)
+Measure and analyze processing time for performance optimization and debugging. Results are displayed in the console and saved to a file.
+
+**Usage:**
+```sh
+# Enable profiling with --profile flag
+python run_random_generation.py -i input.bvh --profile
+```
+
+**Output:**
+- Console: Detailed timing breakdown displayed after processing
+- File: Saved as `*_profile.csv` next to output BVH
+
+**What's measured:**
+- Total processing time
+- Time per iteration
+- Time per generated frame
+- Detailed breakdown for each processing step
+
+See [docs/PROFILING.md](docs/PROFILING.md) for detailed documentation.
+
+**Example output:**
+```
+[Processing Info]
+  >>> Iterations: 3 steps/level × 4 levels = 12 total
+  >>> Time per iteration: 0.596 sec/iter
+  total_frames: 300
+  >>> Time per frame: 0.006 sec/frame
+
+[Time by Process]
+  Process Name                             Total (sec)     Count      Avg (sec)       %
+  match_and_blend_level_0                        0.308         1          0.308     17.2%
+  criteria_evaluation                            0.351        12          0.029     19.6%
+  ...
+```
+
+**File naming:**
+Profile CSV files include metadata in the filename for easy identification:
+- Format: `*_profile_f{frames}_i{steps}x{levels}.csv`
+- Example: `motion_syn_profile_f300_i3x4.csv` means 300 frames, 3 steps/level × 4 levels
+
+**Performance impact:**
+Profiling overhead is typically less than 1% and does not affect results.
+
+**Tips for analysis:**
+- Compare CSV files from multiple runs to identify performance trends
+- Use the "%" column to identify bottlenecks
+- Time per iteration is normalized by steps/level for consistent comparison across different file sizes
+```
+
 ### Keyframe-Guided Generation
 You can fix specific frames from the input motion to guide the generation. This is useful for creating motion variations while preserving start/end poses or creating loopable animations.
 

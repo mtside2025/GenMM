@@ -5,6 +5,7 @@ from GenMM import GenMM
 from nearest_neighbor.losses import PatchCoherentLoss
 from dataset.bvh_motion import BVHMotion, load_multiple_dataset
 from utils.base import ConfigParser, set_seed
+from utils.profiler import get_profiler, enable_profiling
 
 args = argparse.ArgumentParser(
     description='Random shuffle the input motion sequence')
@@ -86,10 +87,19 @@ args.add_argument('--end_speed', type=float, default=None,
                   help='ending velocity multiplier (e.g., 1.0 = original speed, 0.5 = 0.5x speed).')
 args.add_argument('--velocity_loss_weight', type=float, default=0.1,
                   help='weight of velocity profile loss relative to patch coherence loss.')
+args.add_argument('--profile', action='store_true',
+                  help='enable processing time profiling.')
 cfg = ConfigParser(args)
 
 
 def generate(cfg):
+    # Enable profiling if requested
+    profiler = get_profiler()
+    if cfg.profile:
+        enable_profiling()
+        profiler.start()
+        print("Profiling enabled")
+    
     # seet seed for reproducible
     set_seed(cfg.seed)
 
@@ -264,6 +274,27 @@ def generate(cfg):
         output_basename = osp.splitext(osp.basename(output_path))[0]
         cmd = f"python fix_contact.py --prefix {osp.abspath(output_dir)} --name {output_basename} --skeleton_name={cfg.skeleton_name}"
         os.system(cmd)
+    
+    # Output profiling results if enabled
+    if cfg.profile:
+        profiler.stop()
+        
+        # Print to console
+        profiler.print_summary()
+        
+        # Save to file with frames and normalized iterations in filename
+        summary = profiler.get_summary()
+        if summary and summary['metadata']:
+            frames = summary['metadata'].get('total_frames', 0)
+            iters_per_level = summary['metadata'].get('iterations_per_level', 0)
+            num_levels = summary['metadata'].get('num_pyramid_levels', 0)
+            # Format: f{frames}_i{steps}x{levels}
+            profile_suffix = f"_profile_f{frames}_i{iters_per_level}x{num_levels}.csv"
+        else:
+            profile_suffix = "_profile.csv"
+        
+        profile_output_path = osp.join(output_dir, osp.splitext(osp.basename(output_path))[0] + profile_suffix)
+        profiler.save_to_file(profile_output_path)
 
 if __name__ == '__main__':
     generate(cfg)

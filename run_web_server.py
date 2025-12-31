@@ -7,16 +7,28 @@ import gradio as gr
 from GenMM import GenMM
 from nearest_neighbor.losses import PatchCoherentLoss
 from dataset.tracks_motion import TracksMotion
+from utils.profiler import get_profiler, enable_profiling
 
 args = argparse.ArgumentParser(description='Web server for GenMM')
 args.add_argument('-d', '--device', default="cuda:0", type=str, help='device to use.')
 args.add_argument('--ip', default="0.0.0.0", type=str, help='interface url to host.')
 args.add_argument('--port', default=8000, type=int, help='interface port to serve.')
 args.add_argument('--debug', action='store_true', help='debug mode.')
+args.add_argument('--profile', action='store_true', help='enable processing time profiling.')
 args = args.parse_args()
+
+# Enable profiling if requested
+if args.profile:
+    enable_profiling()
+    print("Profiling enabled")
 
 def generate(data):
     data = json.loads(data)
+    
+    # Start profiling
+    profiler = get_profiler()
+    if args.profile:
+        profiler.start()
 
     # create track object
     motion_data = [TracksMotion(data['tracks'], repr='repr6d', use_velo=True, keep_y_pos=True, padding_last=False)]
@@ -39,6 +51,14 @@ def generate(data):
 
     data['time'] = end - start
     data['tracks'] = motion_data[0].parse(syn)
+    
+    # Add profiling info if enabled
+    if args.profile:
+        profiler.stop()
+        profiler.print_summary()
+        summary = profiler.get_summary()
+        if summary:
+            data['profile'] = summary
 
     return data
 

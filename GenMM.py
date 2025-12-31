@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from utils.base import logger
 from utils.velocity_profile import VelocityProfileConstraint, parse_velocity_profile_args
 from nearest_neighbor.velocity_loss import VelocityProfileLoss, CombinedLoss
+from utils.profiler import get_profiler
 
 class GenMM:
     # Keyframe indices to fix during generation (None = disabled)
@@ -100,6 +101,8 @@ class GenMM:
             velocity_profile : dict or None, velocity profile configuration
                              : {'type': str, 'start_speed': float, 'end_speed': float}
         '''
+        profiler = get_profiler()
+        
         # Clear cached position data for each new generation
         GenMM._CACHED_POSITION_DATA = None
         
@@ -115,60 +118,83 @@ class GenMM:
             GenMM.ORIGINAL_MOTION_SOURCE = target
         
         # build target pyramid
-        if 'patchsize' in coarse_ratio:
-            coarse_ratio = patch_size * float(coarse_ratio.split('x_')[0]) / max([len(t.motion_data) for t in target])
-        elif 'nframes' in coarse_ratio:
-            coarse_ratio = float(coarse_ratio.split('x_')[0])
-        else:
-            raise ValueError('Unsupported coarse ratio specified')
-        self.target_pyramid = self._get_target_pyramid(target, coarse_ratio, pyr_factor)
+        with profiler.timer("build_target_pyramid"):
+            if 'patchsize' in coarse_ratio:
+                coarse_ratio = patch_size * float(coarse_ratio.split('x_')[0]) / max([len(t.motion_data) for t in target])
+            elif 'nframes' in coarse_ratio:
+                coarse_ratio = float(coarse_ratio.split('x_')[0])
+            else:
+                raise ValueError('Unsupported coarse ratio specified')
+            self.target_pyramid = self._get_target_pyramid(target, coarse_ratio, pyr_factor)
 
         # get the initial motion data
-        if 'nframes' in num_frames:
-            syn_length = int(sum([i[-1] for i in self.pyraimd_lengths]) * float(num_frames.split('x_')[0]))
-        elif num_frames.isdigit():
-            syn_length = int(num_frames)
-        else:
-            raise ValueError(f'Unsupported mode {self.mode}')
-        self.synthesized_lengths = self._get_pyramid_lengths(syn_length, coarse_ratio, pyr_factor)
-        if not self.silent:
-            print('Synthesized lengths:', self.synthesized_lengths)
-        self.synthesized = self._get_initial_motion(self.synthesized_lengths[0], noise_sigma)
+        with profiler.timer("get_initial_motion"):
+            if 'nframes' in num_frames:
+                syn_length = int(sum([i[-1] for i in self.pyraimd_lengths]) * float(num_frames.split('x_')[0]))
+            elif num_frames.isdigit():
+                syn_length = int(num_frames)
+            else:
+                raise ValueError(f'Unsupported mode {self.mode}')
+            self.synthesized_lengths = self._get_pyramid_lengths(syn_length, coarse_ratio, pyr_factor)
+            if not self.silent:
+                print('Synthesized lengths:', self.synthesized_lengths)
+            self.synthesized = self._get_initial_motion(self.synthesized_lengths[0], noise_sigma)
+            
+            # Set metadata for profiling
+            profiler.set_metadata('total_frames', syn_length)
+            profiler.set_metadata('num_pyramid_levels', len(self.target_pyramid))
 
         # create velocity profile constraint if specified
-        if velocity_profile is not None:
-            profile_constraint = VelocityProfileConstraint(
-                total_frames=syn_length,
-                profile_type=velocity_profile['type'],
-                start_speed=velocity_profile['start_speed'],
-                end_speed=velocity_profile['end_speed'],
-                device=self.device
-            )
-            if not self.silent:
-                print(f'Velocity profile: {profile_constraint}')
-            
-            # Wrap criteria with velocity loss
-            velocity_loss = VelocityProfileLoss(profile_constraint, weight=velocity_profile.get('loss_weight', 0.1))
-            criteria = CombinedLoss(criteria, velocity_loss)
-        else:
-            profile_constraint = None
+        with profiler.timer("setup_velocity_profile"):
+            if velocity_profile is not None:
+                profile_constraint = VelocityProfileConstraint(
+                    total_frames=syn_length,
+                    profile_type=velocity_profile['type'],
+                    start_speed=velocity_profile['start_speed'],
+                    end_speed=velocity_profile['end_speed'],
+                    device=self.device
+                )
+                if not self.silent:
+                    print(f'Velocity profile: {profile_constraint}')
+                
+                # Wrap criteria with velocity loss
+                velocity_loss = VelocityProfileLoss(profile_constraint, weight=velocity_profile.get('loss_weight', 0.1))
+                criteria = CombinedLoss(criteria, velocity_loss)
+            else:
+                profile_constraint = None
 
         # perform the optimization
         self.synthesized.requires_grad_(False)
         self.pbar = logger(num_steps, len(self.target_pyramid))
+        
+        total_iterations = 0
         for lvl, lvl_target in enumerate(self.target_pyramid):
-            self.pbar.new_lvl()
-            if lvl > 0:
-                with torch.no_grad():
-                    self.synthesized = F.interpolate(self.synthesized.detach(), size=self.synthesized_lengths[lvl], mode='linear')
+            with profiler.timer(f"pyramid_level_{lvl}"):
+                self.pbar.new_lvl()
+                
+                with profiler.timer(f"interpolate_level_{lvl}"):
+                    if lvl > 0:
+                        with torch.no_grad():
+                            self.synthesized = F.interpolate(self.synthesized.detach(), size=self.synthesized_lengths[lvl], mode='linear')
 
-            self.synthesized, losses = GenMM.match_and_blend(self.synthesized, lvl_target, criteria, num_steps, self.pbar, ext=ext, profile_constraint=profile_constraint, pyramid_level=lvl, total_levels=len(self.target_pyramid))
+                with profiler.timer(f"match_and_blend_level_{lvl}"):
+                    self.synthesized, losses = GenMM.match_and_blend(
+                        self.synthesized, lvl_target, criteria, num_steps, self.pbar, 
+                        ext=ext, profile_constraint=profile_constraint, 
+                        pyramid_level=lvl, total_levels=len(self.target_pyramid)
+                    )
+                    total_iterations += num_steps
 
-            criteria.clean_cache()
-            if debug_dir is not None:
-                for itr in range(len(losses)):
-                    writer.add_scalar(f'optimize/losses_lvl{lvl}', losses[itr], itr)
+                criteria.clean_cache()
+                if debug_dir is not None:
+                    for itr in range(len(losses)):
+                        writer.add_scalar(f'optimize/losses_lvl{lvl}', losses[itr], itr)
+        
         self.pbar.pbar.close()
+        
+        # Set total iterations for profiling
+        profiler.set_metadata('total_iterations', total_iterations)
+        profiler.set_metadata('iterations_per_level', num_steps)
 
         return self.synthesized.detach()
 
@@ -189,6 +215,7 @@ class GenMM:
             pyramid_level     : int, current pyramid level (0=coarsest)
             total_levels      : int, total number of pyramid levels
         '''
+        profiler = get_profiler()
         losses = []
         keyframe_motion = targets[0] if isinstance(targets, list) else targets
         syn_length = synthesized.shape[-1]
@@ -201,30 +228,34 @@ class GenMM:
         keyframe_indices = GenMM.KEYFRAME_INDICES
 
         for _i in range(n_steps):
-            # Pass use_velo=True to combined loss (assuming velocity representation)
-            synthesized, loss = criteria(synthesized, targets, ext=ext, return_blended_results=True, use_velo=True)
+            with profiler.timer(f"iteration_step"):
+                # Pass use_velo=True to combined loss (assuming velocity representation)
+                with profiler.timer("criteria_evaluation"):
+                    synthesized, loss = criteria(synthesized, targets, ext=ext, return_blended_results=True, use_velo=True)
 
-            # Manually set the keyframes in synthesized motion
-            if keyframe_indices is not None:
-                # Handle both single slice and list of slices
-                indices_list = keyframe_indices if isinstance(keyframe_indices, list) else [keyframe_indices]
-                
-                for kf_slice in indices_list:
-                    # Simple keyframe fixing: copy all channels from keyframe motion
-                    if keyframe_motion.shape[-1] > synthesized.shape[-1]:
-                        # Interpolate keyframe_motion to match synthesized length
-                        synthesized[:, :, kf_slice] = keyframe_motion[:, :, kf_slice.start:kf_slice.start + (kf_slice.stop - kf_slice.start)]
-                    else:
-                        synthesized[:, :, kf_slice] = keyframe_motion[:, :, kf_slice]
+                # Manually set the keyframes in synthesized motion
+                with profiler.timer("keyframe_fixing"):
+                    if keyframe_indices is not None:
+                        # Handle both single slice and list of slices
+                        indices_list = keyframe_indices if isinstance(keyframe_indices, list) else [keyframe_indices]
+                        
+                        for kf_slice in indices_list:
+                            # Simple keyframe fixing: copy all channels from keyframe motion
+                            if keyframe_motion.shape[-1] > synthesized.shape[-1]:
+                                # Interpolate keyframe_motion to match synthesized length
+                                synthesized[:, :, kf_slice] = keyframe_motion[:, :, kf_slice.start:kf_slice.start + (kf_slice.stop - kf_slice.start)]
+                            else:
+                                synthesized[:, :, kf_slice] = keyframe_motion[:, :, kf_slice]
 
-            # Apply velocity profile constraint if specified (only at final pyramid level)
-            if profile_constraint is not None and pyramid_level == total_levels - 1:
-                synthesized = profile_constraint.apply_constraint(synthesized, use_velo=True)
+                # Apply velocity profile constraint if specified (only at final pyramid level)
+                with profiler.timer("velocity_constraint"):
+                    if profile_constraint is not None and pyramid_level == total_levels - 1:
+                        synthesized = profile_constraint.apply_constraint(synthesized, use_velo=True)
 
-            # Update status
-            losses.append(loss.item())
-            pbar.step()
-            pbar.print()
+                # Update status
+                losses.append(loss.item())
+                pbar.step()
+                pbar.print()
 
         return synthesized, losses
 
